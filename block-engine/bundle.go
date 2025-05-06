@@ -11,8 +11,6 @@ import (
 	searcher_pb "github.com/Prophet-Solutions/jito-sdk/pb/searcher"
 	"github.com/Prophet-Solutions/jito-sdk/pkg"
 	"github.com/gagliardetto/solana-go"
-	"github.com/gagliardetto/solana-go/rpc"
-	"github.com/gagliardetto/solana-go/rpc/jsonrpc"
 	"google.golang.org/grpc"
 )
 
@@ -25,9 +23,9 @@ const (
 )
 
 // Helper method to check if a signature exists on the blockchain
-/*
+
 func (c *SearcherClient) checkSignatureExistence(ctx context.Context, signature solana.Signature) (bool, error) {
-	maxRetries := 5
+	maxRetries := 10
 	retryDelay := 250 * time.Millisecond // Wait half a second between retries
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -71,32 +69,6 @@ func (c *SearcherClient) checkSignatureExistence(ctx context.Context, signature 
 	}
 
 	return false, fmt.Errorf("signature %s not found or failed after retries", signature)
-}
-*/
-func (c *SearcherClient) checkSignatureExistence(ctx context.Context, signature solana.Signature) (bool, error) {
-	opts := &rpc.GetTransactionOpts{
-		Encoding:                       solana.EncodingBase58, // Could also be EncodingBase64 if needed
-		Commitment:                     rpc.CommitmentConfirmed,
-		MaxSupportedTransactionVersion: &rpc.MaxSupportedTransactionVersion0,
-	}
-
-	tx, err := c.RPCConn.GetTransaction(context.Background(), signature, opts)
-	if err != nil {
-		fmt.Println(err)
-		// Check for JSON-RPC specific errors, such as "transaction not found"
-		if jsonrpcErr, ok := err.(*jsonrpc.RPCError); ok && jsonrpcErr.Code == -32000 {
-			fmt.Println("panding")
-		}
-		fmt.Println("err", err)
-	}
-
-	if tx == nil {
-		fmt.Println(tx)
-		fmt.Println("nil")
-	}
-
-	fmt.Println(tx)
-	return true, nil
 }
 
 func (c SearcherClient) SendBundleWithConfirmation(
