@@ -17,7 +17,7 @@ import (
 // Constants for retry and timeout configurations
 const (
 	CheckBundleRetries               = 10               // Number of times to retry checking bundle status
-	CheckBundleRetryDelay            = 3 * time.Second  // Delay between retries for checking bundle status
+	CheckBundleRetryDelay            = 5 * time.Second  // Delay between retries for checking bundle status
 	SignaturesConfirmationTimeout    = 15 * time.Second // Timeout for confirming signatures
 	SignaturesConfirmationRetryDelay = 1 * time.Second  // Delay between retries for confirming signatures
 )
