@@ -22,233 +22,168 @@ const (
 	SignaturesConfirmationRetryDelay = 1 * time.Second  // Delay between retries for confirming signatures
 )
 
-// SendBundleWithConfirmation sends a bundle of transactions and waits for confirmation of signatures.
-// It attempts to send the bundle, then continuously checks for the result of the bundle and validates
-// the signatures of the transactions.
-/*
-func (c *SearcherClient) SendBundleWithConfirmation(
-	ctx context.Context,
-	transactions []*solana.Transaction,
-	opts ...grpc.CallOption,
-) (*BundleResponse, error) {
-	// Send the bundle of transactions
-	resp, err := c.SendBundle(transactions, opts...)
+// Helper method to check if a signature exists on the blockchain
+func (c SearcherClient) checkSignatureExistence(ctx context.Context, signature solana.Signature) (bool, error) {
+	// Make the RPC call to check the signature status
+	time.Sleep(200 * time.Millisecond)
+	out, err := c.RPCConn.GetSignatureStatuses(ctx, false, signature)
 	if err != nil {
-		return nil, err
+		return false, fmt.Errorf("error checking signature status: %v", err)
 	}
 
-	// Retry checking the bundle result up to a configured number of times
-	for i := 0; i < CheckBundleRetries; i++ {
-		select {
-		case <-c.AuthenticationService.GRPCCtx.Done():
-			// If the GRPC context is done, return the error
-			return nil, c.AuthenticationService.GRPCCtx.Err()
-		default:
-			// Wait for a configured delay before retrying
-			time.Sleep(CheckBundleRetryDelay)
-
-			// Attempt to receive the bundle result
-			bundleResult, err := c.receiveBundleResult()
-			if err != nil {
-				//log.Println("error while receiving bundle result:", err)
-			} else {
-				// Handle the received bundle result
-				if err = c.handleBundleResult(bundleResult); err != nil {
-					if strings.Contains(err.Error(), "has already been processed") {
-						return &BundleResponse{
-							BundleResponse: resp,
-							Signatures:     pkg.BatchExtractSigFromTx(transactions),
-						}, nil
-					}
-					return nil, err
-				}
-
-				log.Println("Bundle was sent.")
-			}
-
-			// Wait for the statuses of the transaction signatures
-			statuses, err := c.waitForSignatureStatuses(ctx, transactions)
-			if err != nil {
-				continue
-			}
-
-			// Validate the received signature statuses
-			if err = pkg.ValidateSignatureStatuses(statuses); err != nil {
-				continue
-			}
-
-			// Return the successful bundle response with extracted signatures
-			return &BundleResponse{
-				BundleResponse: resp,
-				Signatures:     pkg.BatchExtractSigFromTx(transactions),
-			}, nil
-		}
+	// Check if we have a valid result for the signature
+	if out.Value == nil || len(out.Value) == 0 || out.Value[0] == nil {
+		return false, fmt.Errorf("signature not found")
 	}
 
-	// If the retries are exhausted, return an error
-	return nil, fmt.Errorf("BroadcastBundleWithConfirmation error: max retries (%d) exceeded", CheckBundleRetries)
+	status := out.Value[0]
+	if status == nil {
+		return false, fmt.Errorf("signature status is nil")
+	}
+
+	// Check if the signature is confirmed
+	if status.ConfirmationStatus == "confirmed" {
+		return true, nil
+	}
+
+	// Handle failure cases
+	if status.Err != nil {
+		return false, fmt.Errorf("transaction failed: %v", status.Err)
+	}
+
+	// The signature isn't confirmed yet
+	return false, nil
 }
-*/
-func (c *SearcherClient) SendBundleWithConfirmation(
+
+func (c SearcherClient) SendBundleWithConfirmation(
 	ctx context.Context,
 	transactions []*solana.Transaction,
-	signature *solana.Signature,
+	signature solana.Signature,
 	opts ...grpc.CallOption,
-) (*BundleResponse, error) {
-	// Send the bundle of transactions
+) (BundleResponse, error) {
 	resp, err := c.SendBundle(transactions, opts...)
 	if err != nil {
-		return nil, err
+		return BundleResponse{}, err
 	}
-
 	fmt.Printf("tx (%s) sent...\n", signature)
 
-	// Create a timeout and a cancellation context
-	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
-	defer cancelTimeout()
+	// Check if the signature exists and is confirmed
+	sigExists, err := c.checkSignatureExistence(ctx, signature)
+	if err != nil {
+		return BundleResponse{}, fmt.Errorf("error checking signature existence: %v", err)
+	}
 
-	operationCtx, cancelOp := context.WithCancel(timeoutCtx)
-	defer cancelOp()
+	if !sigExists {
+		return BundleResponse{}, fmt.Errorf("signature %s has not been confirmed or failed", signature)
+	}
 
-	normalCheckDone := make(chan *BundleResponse, 1)
-	additionalCheckDone := make(chan *BundleResponse, 1)
+	// Proceed with the normal confirmation process
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
-	// Start normal check
+	type result struct {
+		response *BundleResponse
+		err      error
+	}
+
+	resultChan := make(chan result, 2)
+
+	// Normal check goroutine
 	go func() {
+		defer close(resultChan)
 		for i := 0; i < CheckBundleRetries; i++ {
 			select {
-			case <-operationCtx.Done():
+			case <-ctx.Done():
 				return
 			default:
 			}
 
 			time.Sleep(CheckBundleRetryDelay)
 
-			select {
-			case <-operationCtx.Done():
-				return
-			default:
-			}
-
 			bundleResult, err := c.receiveBundleResult()
 			if err != nil {
-				log.Println("[normalCheck] Error receiving bundle result:", err)
+				log.Println("[normalCheck] receiveBundleResult error:", err)
 				continue
 			}
 
-			if err = c.handleBundleResult(bundleResult); err != nil {
+			if err := c.handleBundleResult(bundleResult); err != nil {
 				if strings.Contains(err.Error(), "has already been processed") {
-					normalCheckDone <- &BundleResponse{
+					resultChan <- result{&BundleResponse{
 						BundleResponse: resp,
 						Signatures:     pkg.BatchExtractSigFromTx(transactions),
-					}
+					}, nil}
 					return
 				}
 				log.Println("[normalCheck] handleBundleResult error:", err)
-				normalCheckDone <- nil
-				return
+				continue
 			}
 
-			statuses, err := c.waitForSignatureStatuses(operationCtx, transactions)
+			statuses, err := c.waitForSignatureStatuses(ctx, transactions)
 			if err != nil {
-				log.Println("[normalCheck] Error waiting for signature statuses:", err)
+				log.Println("[normalCheck] waitForSignatureStatuses error:", err)
 				continue
 			}
 
 			if err := pkg.ValidateSignatureStatuses(statuses); err != nil {
-				log.Println("[normalCheck] Signature status validation failed:", err)
+				log.Println("[normalCheck] ValidateSignatureStatuses error:", err)
 				continue
 			}
 
-			// Success
-			normalCheckDone <- &BundleResponse{
+			resultChan <- result{&BundleResponse{
 				BundleResponse: resp,
 				Signatures:     pkg.BatchExtractSigFromTx(transactions),
-			}
+			}, nil}
 			return
 		}
-
-		// Retries exhausted
-		normalCheckDone <- nil
 	}()
 
-	// Start additional check (signature polling)
+	// Signature polling goroutine
 	go func() {
 		for {
 			select {
-			case <-operationCtx.Done():
+			case <-ctx.Done():
 				return
 			default:
 			}
 
-			time.Sleep(CheckBundleRetryDelay)
-			select {
-			case <-operationCtx.Done():
-				return
-			default:
-			}
-
-			out, err := c.RPCConn.GetSignatureStatuses(
-				operationCtx,
-				false,
-				*signature,
-			)
+			out, err := c.RPCConn.GetSignatureStatuses(ctx, false, signature)
 			if err != nil {
 				log.Println("[additionalCheck] GetSignatureStatuses error:", err)
 				continue
 			}
 
 			if out.Value == nil || len(out.Value) == 0 || out.Value[0] == nil {
-				// No status yet
-				additionalCheckDone <- nil
-				return
+				continue
 			}
 
-			confirmed := false
 			for _, status := range out.Value {
-				if status != nil {
-					if status.ConfirmationStatus == "confirmed" {
-						confirmed = true
-						break
-					}
-					if status.Err != nil {
-						// Transaction failed
-						additionalCheckDone <- nil
-						return
-					}
+				if status == nil {
+					continue
+				}
+				if status.ConfirmationStatus == "confirmed" {
+					resultChan <- result{&BundleResponse{
+						BundleResponse: resp,
+						Signatures:     pkg.BatchExtractSigFromTx(transactions),
+					}, nil}
+					return
+				}
+				if status.Err != nil {
+					resultChan <- result{nil, fmt.Errorf("transaction failed: %v", status.Err)}
+					return
 				}
 			}
 
-			if confirmed {
-				additionalCheckDone <- &BundleResponse{
-					BundleResponse: resp,
-					Signatures:     pkg.BatchExtractSigFromTx(transactions),
-				}
-				return
-			}
+			time.Sleep(CheckBundleRetryDelay)
 		}
 	}()
 
-	// Wait for one of the checks or timeout
+	// Wait for result or timeout
 	select {
-	case res := <-normalCheckDone:
-		if res != nil {
-			cancelOp()
-			return res, nil
-		}
-	case res := <-additionalCheckDone:
-		if res != nil {
-			cancelOp()
-			return res, nil
-		}
-		return nil, fmt.Errorf("tx didn't lend")
-	case <-timeoutCtx.Done():
-		cancelOp()
-		return nil, fmt.Errorf("BroadcastBundleWithConfirmation error: timeout exceeded")
+	case res := <-resultChan:
+		return *res.response, res.err
+	case <-ctx.Done():
+		return BundleResponse{}, fmt.Errorf("SendBundleWithConfirmation: timeout exceeded")
 	}
-
-	// Fallback (should not normally reach here)
-	return nil, fmt.Errorf("BroadcastBundleWithConfirmation error: max retries (%d) exceeded", CheckBundleRetries)
 }
 
 // SendBundle creates and sends a bundle of transactions to the Searcher service.
