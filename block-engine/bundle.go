@@ -23,15 +23,13 @@ const (
 )
 
 // Helper method to check if a signature exists on the blockchain
-func (c SearcherClient) checkSignatureExistence(ctx context.Context, signature solana.Signature) (bool, error) {
-	// Make the RPC call to check the signature status
-	time.Sleep(200 * time.Millisecond)
+func (c *SearcherClient) checkSignatureExistence(ctx context.Context, signature solana.Signature) (bool, error) {
+	time.Sleep(200 * time.Millisecond) // Can increase the sleep time to allow for better network performance.
 	out, err := c.RPCConn.GetSignatureStatuses(ctx, false, signature)
 	if err != nil {
 		return false, fmt.Errorf("error checking signature status: %v", err)
 	}
 
-	// Check if we have a valid result for the signature
 	if out.Value == nil || len(out.Value) == 0 || out.Value[0] == nil {
 		return false, fmt.Errorf("signature not found")
 	}
@@ -41,18 +39,11 @@ func (c SearcherClient) checkSignatureExistence(ctx context.Context, signature s
 		return false, fmt.Errorf("signature status is nil")
 	}
 
-	// Check if the signature is confirmed
-	if status.ConfirmationStatus == "confirmed" {
-		return true, nil
-	}
-
-	// Handle failure cases
 	if status.Err != nil {
 		return false, fmt.Errorf("transaction failed: %v", status.Err)
 	}
 
-	// The signature isn't confirmed yet
-	return false, nil
+	return true, nil // If the signature is found, we return true.
 }
 
 func (c SearcherClient) SendBundleWithConfirmation(
@@ -68,13 +59,13 @@ func (c SearcherClient) SendBundleWithConfirmation(
 	fmt.Printf("tx (%s) sent...\n", signature)
 
 	// Check if the signature exists and is confirmed
+	// Check signature existence first
 	sigExists, err := c.checkSignatureExistence(ctx, signature)
 	if err != nil {
 		return BundleResponse{}, fmt.Errorf("error checking signature existence: %v", err)
 	}
-
 	if !sigExists {
-		return BundleResponse{}, fmt.Errorf("signature %s has not been confirmed or failed", signature)
+		return BundleResponse{}, fmt.Errorf("signature %s does not exist or failed", signature)
 	}
 
 	// Proceed with the normal confirmation process
