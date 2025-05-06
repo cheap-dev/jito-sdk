@@ -1,10 +1,11 @@
-module github.com/Prophet-Solutions/jito-sdk
+module github.com/cheap-dev/jito-sdk
 
 go 1.22.7
 
 toolchain go1.22.9
 
 require (
+	github.com/Prophet-Solutions/jito-sdk v1.0.1
 	github.com/gagliardetto/binary v0.8.0
 	github.com/gagliardetto/solana-go v1.12.0
 	github.com/mr-tron/base58 v1.2.0
