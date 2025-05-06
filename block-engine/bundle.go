@@ -34,7 +34,6 @@ func (c *SearcherClient) checkSignatureExistence(ctx context.Context, signature 
 		// Make the RPC call to check the signature status
 		out, err := c.RPCConn.GetSignatureStatuses(ctx, false, signature)
 		if err != nil {
-			return false, fmt.Errorf("error checking signature status: %v", err)
 		}
 
 		// If the out.Value is nil or empty, we retry
