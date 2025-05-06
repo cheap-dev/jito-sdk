@@ -24,26 +24,48 @@ const (
 
 // Helper method to check if a signature exists on the blockchain
 func (c *SearcherClient) checkSignatureExistence(ctx context.Context, signature solana.Signature) (bool, error) {
-	time.Sleep(200 * time.Millisecond) // Can increase the sleep time to allow for better network performance.
-	out, err := c.RPCConn.GetSignatureStatuses(ctx, false, signature)
-	if err != nil {
-		return false, fmt.Errorf("error checking signature status: %v", err)
+	maxRetries := 5
+	retryDelay := 250 * time.Millisecond // Wait half a second between retries
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		time.Sleep(retryDelay)
+
+		// Make the RPC call to check the signature status
+		out, err := c.RPCConn.GetSignatureStatuses(ctx, false, signature)
+		if err != nil {
+			return false, fmt.Errorf("error checking signature status: %v", err)
+		}
+
+		fmt.Println("out value", out.Value[0])
+
+		// If the out.Value is nil or empty, we retry
+		if out.Value == nil || len(out.Value) == 0 || out.Value[0] == nil {
+			if attempt == maxRetries {
+				return false, fmt.Errorf("signature %s not found after %d attempts", signature, maxRetries)
+			}
+			// Retry if no valid status is found
+			continue
+		}
+
+		status := out.Value[0]
+		if status == nil {
+			return false, fmt.Errorf("signature status is nil for %s", signature)
+		}
+
+		// If the signature has a confirmation error, return failure
+		if status.Err != nil {
+			return false, fmt.Errorf("transaction failed: %v", status.Err)
+		}
+
+		// If it's confirmed, return true
+		if status.ConfirmationStatus == "confirmed" {
+			return true, nil
+		}
+
+		// If not confirmed, continue checking
 	}
 
-	if out.Value == nil || len(out.Value) == 0 || out.Value[0] == nil {
-		return false, fmt.Errorf("signature not found")
-	}
-
-	status := out.Value[0]
-	if status == nil {
-		return false, fmt.Errorf("signature status is nil")
-	}
-
-	if status.Err != nil {
-		return false, fmt.Errorf("transaction failed: %v", status.Err)
-	}
-
-	return true, nil // If the signature is found, we return true.
+	return false, fmt.Errorf("signature %s not found or failed after retries", signature)
 }
 
 func (c SearcherClient) SendBundleWithConfirmation(
