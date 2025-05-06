@@ -37,10 +37,6 @@ func (c *SearcherClient) checkSignatureExistence(ctx context.Context, signature 
 			return false, fmt.Errorf("error checking signature status: %v", err)
 		}
 
-		fmt.Println("out", out)
-		fmt.Print("out value 2", out.Value)
-		fmt.Println("out value", out.Value[0])
-
 		// If the out.Value is nil or empty, we retry
 		if out.Value == nil || len(out.Value) == 0 || out.Value[0] == nil {
 			if attempt == maxRetries {
